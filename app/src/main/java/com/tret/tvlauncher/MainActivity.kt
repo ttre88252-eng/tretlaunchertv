@@ -2,6 +2,11 @@ package com.tret.tvlauncher
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.widget.ImageView
+import android.widget.VideoView
+import androidx.compose.ui.viewinterop.AndroidView
 import android.provider.Settings
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -76,14 +81,22 @@ object Config {
 data class AppItem(val label: String, val pkg: String, val imagen: ImageBitmap, val esBanner: Boolean)
 data class HoraClima(val temp: Int, val code: Int, val hora: Int)
 data class Clima(val actual: Int, val code: Int, val max: Int, val min: Int, val horas: List<HoraClima>)
-data class Continuar(val titulo: String, val detalle: String, val pkg: String, val color: Color)
 
-// Ejemplos de "A continuación". Cámbialos por lo que quieras (o conéctalos a una API como TMDB).
-val continuarEjemplo = listOf(
-    Continuar("Susurros mortales", "Quedan 1 h 58 min · Netflix", "com.netflix.ninja", Color(0xFF1F5F4A)),
-    Continuar("Mi película", "Quedan 1 h 27 min · Prime Video", "com.amazon.amazonvideo.livingroom", Color(0xFFE5B800)),
-    Continuar("Lupin", "T1 E1 · Netflix", "com.netflix.ninja", Color(0xFF3B4A6B)),
-)
+// ───────────────────────── APPS MÁS USADAS ─────────────────────────
+// Cuenta cuántas veces abres cada app desde este launcher (no requiere permisos).
+fun Context.prefsUso() = getSharedPreferences("uso_apps", Context.MODE_PRIVATE)
+fun Context.sumarUso(pkg: String) {
+    val p = prefsUso()
+    p.edit().putInt(pkg, p.getInt(pkg, 0) + 1).apply()
+}
+fun masUsadas(ctx: Context, apps: List<AppItem>, max: Int = 6): List<AppItem> {
+    val p = ctx.prefsUso()
+    val usadas = apps.filter { p.getInt(it.pkg, 0) > 0 }.sortedByDescending { p.getInt(it.pkg, 0) }
+    // Si aún no hay historial, completa con las primeras apps
+    return (usadas + apps.filter { it !in usadas }).take(max)
+}
+
+val resumeTick = mutableIntStateOf(0)
 
 // ───────────────────────── ACTIVIDAD ─────────────────────────
 class MainActivity : ComponentActivity() {
@@ -91,9 +104,15 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent { LauncherApp() }
     }
+
+    override fun onResume() {
+        super.onResume()
+        resumeTick.intValue++
+    }
 }
 
 fun Context.abrirApp(pkg: String) {
+    sumarUso(pkg)
     val i = packageManager.getLeanbackLaunchIntentForPackage(pkg)
         ?: packageManager.getLaunchIntentForPackage(pkg)
     i?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)?.let { startActivity(it) }
@@ -213,6 +232,12 @@ fun LauncherApp() {
     )
 
     Box(Modifier.fillMaxSize().background(fondo)) {
+        FondoMedia()
+        Box(
+            Modifier.fillMaxSize().background(
+                Brush.verticalGradient(listOf(Color(0x66000000), Color(0x1A000000), Color(0x99000000)))
+            )
+        )
         Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 28.dp)) {
             BarraSuperior(tab) { tab = it }
             Spacer(Modifier.height(16.dp))
@@ -269,6 +294,8 @@ fun BarraSuperior(tab: Int, onTab: (Int) -> Unit) {
 @Composable
 fun Inicio(apps: List<AppItem>, clima: Clima?) {
     val ctx = LocalContext.current
+    val tick = resumeTick.intValue
+    val usadas = remember(apps, tick) { masUsadas(ctx, apps) }
     val fecha = LocalDate.now()
         .format(DateTimeFormatter.ofPattern("EEEE d 'de' MMMM", Locale("es", "MX")))
         .replaceFirstChar { it.uppercase() }
@@ -280,29 +307,12 @@ fun Inicio(apps: List<AppItem>, clima: Clima?) {
         Spacer(Modifier.height(24.dp))
 
         Row(Modifier.fillMaxWidth().height(250.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-            // ── A continuación ──
+            // ── Más usadas ──
             TarjetaVidrio(Modifier.weight(2f)) {
-                Text("A continuación", color = Color.White.copy(alpha = 0.9f), fontSize = 16.sp)
+                Text("Más usadas", color = Color.White.copy(alpha = 0.9f), fontSize = 16.sp)
                 Spacer(Modifier.height(10.dp))
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    items(continuarEjemplo) { c ->
-                        Column(Modifier.width(210.dp)) {
-                            Surface(
-                                onClick = { ctx.abrirApp(c.pkg) },
-                                shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(16.dp)),
-                                colors = ClickableSurfaceDefaults.colors(containerColor = c.color, focusedContainerColor = c.color),
-                                scale = ClickableSurfaceDefaults.scale(focusedScale = 1.08f),
-                                modifier = Modifier.fillMaxWidth().height(118.dp)
-                            ) {
-                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    Text(c.titulo, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            Text(c.titulo, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                            Text(c.detalle, color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp, maxLines = 1)
-                        }
-                    }
+                    items(usadas) { app -> TarjetaApp(app, ancho = 190.dp, alto = 110.dp, siempreEtiqueta = true) }
                 }
             }
             // ── Clima ──
@@ -315,7 +325,7 @@ fun Inicio(apps: List<AppItem>, clima: Clima?) {
 }
 
 @Composable
-fun TarjetaClima(clima: Clima?) {
+fun ColumnScope.TarjetaClima(clima: Clima?) {
     Text("➤ ${Config.CIUDAD}", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
     if (clima == null) {
         Spacer(Modifier.height(12.dp))
@@ -365,7 +375,7 @@ fun FilaApps(apps: List<AppItem>) {
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-fun TarjetaApp(app: AppItem) {
+fun TarjetaApp(app: AppItem, ancho: androidx.compose.ui.unit.Dp = 176.dp, alto: androidx.compose.ui.unit.Dp = 100.dp, siempreEtiqueta: Boolean = false) {
     val ctx = LocalContext.current
     var enfocada by remember { mutableStateOf(false) }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -377,7 +387,7 @@ fun TarjetaApp(app: AppItem) {
                 focusedContainerColor = Color.White.copy(alpha = 0.95f)
             ),
             scale = ClickableSurfaceDefaults.scale(focusedScale = 1.12f),
-            modifier = Modifier.size(width = 176.dp, height = 100.dp).onFocusChanged { enfocada = it.isFocused }
+            modifier = Modifier.size(width = ancho, height = alto).onFocusChanged { enfocada = it.isFocused }
         ) {
             Image(
                 bitmap = app.imagen,
@@ -388,7 +398,7 @@ fun TarjetaApp(app: AppItem) {
         }
         Spacer(Modifier.height(6.dp))
         Text(
-            if (enfocada) app.label else " ",
+            if (enfocada || siempreEtiqueta) app.label else " ",
             color = Color.White, fontSize = 14.sp, maxLines = 1
         )
     }
@@ -432,6 +442,57 @@ fun Ajustes() {
             ) {
                 Text(nombre, fontSize = 20.sp, modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp))
             }
+        }
+    }
+}
+
+// ───────────────────────── FONDO (imagen o video) ─────────────────────────
+// Pon tu archivo con el nombre "fondo":
+//   Video:  app/src/main/res/raw/fondo.mp4
+//   Imagen: app/src/main/res/drawable-nodpi/fondo.jpg  (o .png)
+// Si no hay ninguno, se usa el degradado.
+@Composable
+fun FondoMedia() {
+    val ctx = LocalContext.current
+    val videoId = remember { ctx.resources.getIdentifier("fondo", "raw", ctx.packageName) }
+    val imgId = remember { ctx.resources.getIdentifier("fondo", "drawable", ctx.packageName) }
+
+    if (videoId != 0) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { c ->
+                VideoView(c).apply {
+                    setVideoURI(Uri.parse("android.resource://${c.packageName}/$videoId"))
+                    setOnPreparedListener { mp ->
+                        mp.isLooping = true
+                        mp.setVolume(0f, 0f)
+                    }
+                    setOnErrorListener { _, _, _ -> true }
+                    start()
+                }
+            },
+            update = { v -> if (!v.isPlaying) v.start() }
+        )
+    } else if (imgId != 0) {
+        val bmp = remember {
+            try {
+                val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeResource(ctx.resources, imgId, o)
+                var sample = 1
+                while (o.outWidth / sample > 2200) sample *= 2
+                BitmapFactory.decodeResource(ctx.resources, imgId, BitmapFactory.Options().apply { inSampleSize = sample })
+            } catch (e: Throwable) { null }
+        }
+        if (bmp != null) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { c ->
+                    ImageView(c).apply {
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                        setImageBitmap(bmp)
+                    }
+                }
+            )
         }
     }
 }
